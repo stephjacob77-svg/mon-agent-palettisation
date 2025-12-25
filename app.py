@@ -17,59 +17,79 @@ def draw_cube(fig, x_range, y_range, z_range, color, opacity=0.8):
 
 def get_mixed_layer_plan(W_max, L_max, cl, cw):
     plan = []
-    # Bloc principal (orientation standard)
-    nx = W_max // cl
-    ny = L_max // cw
-    for i in range(int(nx)):
-        for j in range(int(ny)):
+    # 1. Remplissage bloc principal
+    nx = int(W_max // cl)
+    ny = int(L_max // cw)
+    for i in range(nx):
+        for j in range(ny):
             plan.append((i*cl, j*cw, cl, cw))
     
-    # Remplissage de la bande résiduelle en X (Largeur)
+    # 2. Remplissage bande résiduelle sur la Largeur (X)
     reste_x = W_max - (nx * cl)
     if reste_x >= cw:
-        ny_reste = L_max // cl
-        nx_reste = reste_x // cw
-        for i in range(int(nx_reste)):
-            for j in range(int(ny_reste)):
+        nx_reste = int(reste_x // cw)
+        ny_reste = int(L_max // cl)
+        for i in range(nx_reste):
+            for j in range(ny_reste):
                 plan.append((nx*cl + i*cw, j*cl, cw, cl))
                 
-    # Remplissage de la bande résiduelle en Y (Longueur)
+    # 3. Remplissage bande résiduelle sur la Longueur (Y)
     reste_y = L_max - (ny * cw)
     if reste_y >= cl:
-        nx_reste_y = (nx * cl) // cw
-        ny_reste_y = reste_y // cl
-        for i in range(int(nx_reste_y)):
-            for j in range(int(ny_reste_y)):
+        nx_reste_y = int((nx * cl) // cw)
+        ny_reste_y = int(reste_y // cl)
+        for i in range(nx_reste_y):
+            for j in range(ny_reste_y):
                 plan.append((i*cw, ny*cw + j*cl, cw, cl))
     return plan
 
 def generate_pallet_plan():
-    st.set_page_config(page_title="IA Palettisation Mixed", layout="wide")
+    st.set_page_config(page_title="IA Palettisation", layout="wide")
     
-    st.sidebar.header("📦 Dimensions Colis")
-    cl = st.sidebar.number_input("Long. (mm)", value=400)
-    cw = st.sidebar.number_input("Larg. (mm)", value=300)
-    ch = st.sidebar.number_input("Haut. (mm)", value=250)
+    # --- Sidebar ---
+    st.sidebar.header("📦 Colis")
+    cl = st.sidebar.number_input("Longueur (mm)", value=400)
+    cw = st.sidebar.number_input("Largeur (mm)", value=300)
+    ch = st.sidebar.number_input("Hauteur (mm)", value=250)
+    cp = st.sidebar.number_input("Poids (kg)", value=10.0)
+    
+    st.sidebar.header("🏗️ Stockage")
     overhang = st.sidebar.slider("Débordement (mm)", 0, 50, 0)
     h_lisse = st.sidebar.number_input("Hauteur Rack (mm)", value=1800)
+    l_lisse = st.sidebar.number_input("Longueur Lisse (mm)", value=2700)
+    pmax_lisse = st.sidebar.number_input("Poids Max Lisse (kg)", value=3000)
     
-    st.sidebar.header("🏗️ Type Palette")
+    st.sidebar.header("📏 Palette")
     target_pal = st.sidebar.selectbox("Format", ["800x1200", "1000x1200"])
     W_pal = 800 if "800" in target_pal else 1000
     L_pal = 1200
     
-    # Calculs du plan
-    W_max, L_max = W_pal + 2*overhang, L_pal + 2*overhang
+    # --- Calculs ---
+    W_max, L_max = W_pal + (2 * overhang), L_pal + (2 * overhang)
     plan_couche = get_mixed_layer_plan(W_max, L_max, cl, cw)
     nb_couches = int((h_lisse - 250) // ch) 
+    total_colis = len(plan_couche) * nb_couches
+    poids_pal = (total_colis * cp) + 25
+    nb_pal_lisse = int(l_lisse // W_pal)
+    poids_total_lisse = nb_pal_lisse * poids_pal
+
+    # --- Interface ---
+    st.title(f"Plan de Palettisation : {total_colis} colis")
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Poids Palette", f"{round(poids_pal)} kg")
+    c2.metric("Charge Lisse", f"{round(poids_total_lisse)} kg")
+    c3.metric("Efficacité", f"{round((total_colis*cl*cw*ch)/(W_pal*L_pal*nb_couches*ch)*100)} %")
+
+    if poids_total_lisse > pmax_lisse:
+        st.error(f"🚨 SURCHARGE LISSE : +{round(poids_total_lisse - pmax_lisse)} kg !")
+
+    col_left, col_right = st.columns(2)
+    
     colors = ["#3498db", "#e74c3c", "#2ecc71", "#f1c40f", "#9b59b6", "#e67e22"]
 
-    st.title(f"Optimisation : {len(plan_couche) * nb_couches} colis au total")
-
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Visualisation 3D (Couleurs par étage)")
+    with col_left:
+        st.subheader("Vue 3D (Couleurs par étage)")
         fig = go.Figure()
         draw_cube(fig, [0, W_pal], [0, L_pal], [0, 150], "peru") # Palette
         
@@ -77,34 +97,25 @@ def generate_pallet_plan():
             color = colors[k % len(colors)]
             for (x, y, dx, dy) in plan_couche:
                 z0 = 150 + (k * ch)
-                # Effet de croisement pour la stabilité (miroir une couche sur deux)
+                # Effet miroir pour la stabilité
                 if k % 2 == 1:
                     fx, fy = (W_max - x - dx), (L_max - y - dy)
                 else:
                     fx, fy = x, y
-                
-                draw_cube(fig, [fx-overhang, fx+dx-overhang], 
-                               [fy-overhang, fy+dy-overhang], 
-                               [z0, z0+ch], color)
+                draw_cube(fig, [fx-overhang, fx+dx-overhang], [fy-overhang, fy+dy-overhang], [z0, z0+ch], color)
         
         fig.update_layout(scene=dict(aspectmode='data'), margin=dict(l=0,r=0,b=0,t=0))
         st.plotly_chart(fig, use_container_width=True)
 
-    with col2:
-        st.subheader("Plan de pose (Couche 1)")
+    with col_right:
+        st.subheader("Plan de pose (Étage 1)")
         fig2 = go.Figure()
         fig2.add_shape(type="rect", x0=0, y0=0, x1=W_pal, y1=L_pal, line=dict(color="brown", width=4))
         for (x, y, dx, dy) in plan_couche:
             fig2.add_shape(type="rect", x0=x-overhang, y0=y-overhang, x1=x+dx-overhang, y1=y+dy-overhang, 
-                           fillcolor="royalblue", line=dict(color="white", width=2))
-        
-        fig2.update_layout(xaxis_range=[-100, W_pal+100], yaxis_range=[-100, L_pal+100], height=500)
+                           fillcolor="royalblue", opacity=0.6, line=dict(color="white", width=2))
+        fig2.update_layout(xaxis=dict(range=[-100, W_pal+100]), yaxis=dict(range=[-100, L_pal+100]), height=500)
         st.plotly_chart(fig2, use_container_width=True)
-
-if __name__ == "__main__":
-    generate_pallet_plan()
-        fig2d.update_layout(xaxis_range=[-50, 1050], yaxis_range=[-50, 1250], height=500)
-        st.plotly_chart(fig2d, use_container_width=True)
 
 if __name__ == "__main__":
     generate_pallet_plan()
