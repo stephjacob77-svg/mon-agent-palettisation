@@ -2,7 +2,6 @@ import streamlit as st
 import plotly.graph_objects as go
 import math
 
-# --- FONCTION GRAPHIQUE ---
 def draw_cube(fig, x_range, y_range, z_range, color, opacity=0.8):
     x_min, x_max = x_range
     y_min, y_max = y_range
@@ -33,89 +32,106 @@ def get_mixed_layer_plan(W_max, L_max, cl, cw):
 def mode_simple_valide():
     st.header("📦 Optimiseur de Palettisation Simple")
     
-    # --- Sidebar : Contraintes ---
+    # --- Sidebar ---
     st.sidebar.header("🏢 Contraintes de Stockage")
     l_lisse = st.sidebar.selectbox("Longueur de lisse (mm)", [2700, 3600, 1350])
     p_max_lisse = st.sidebar.number_input("Poids max par niveau (kg)", value=3000)
-    h_max = st.sidebar.number_input("Hauteur Max Rack (mm)", value=1800)
+    h_max_rack = st.sidebar.number_input("Hauteur Max Rack (mm)", value=1800)
     
     st.sidebar.header("📦 Produit")
     cl = st.sidebar.number_input("Long. (mm)", value=400)
     cw = st.sidebar.number_input("Larg. (mm)", value=300)
     ch = st.sidebar.number_input("Haut. (mm)", value=250)
-    cp = st.sidebar.number_input("Poids Unitaire (kg)", value=20.0) # Test avec poids lourd
+    cp = st.sidebar.number_input("Poids Unitaire (kg)", value=20.0)
     overhang = st.sidebar.slider("Débordement (mm)", 0, 50, 0)
 
-    # --- Logique de calcul multi-support ---
+    # --- CALCULS DE BRIDAGE ---
     options = [800, 1000]
-    results = {}
+    final_results = {}
 
     for W in options:
+        # 1. Plan d'une couche
         plan = get_mixed_layer_plan(W + 2*overhang, 1200 + 2*overhang, cl, cw)
-        colis_couche = len(plan)
+        colis_par_couche = len(plan)
         nb_pal_sol = int(l_lisse // W)
         
-        # 1. Limite Poids
-        poids_max_autorise_par_pal = (p_max_lisse / nb_pal_sol) - 25
-        colis_max_poids = int(poids_max_autorise_par_pal // cp)
+        # 2. Poids max autorisé par palette pour respecter la lisse
+        # Formule : (Capacité Lisse / Nb Palettes) - Poids Palette Vide
+        poids_autorise_pal = (p_max_lisse / nb_pal_sol) - 25
         
-        # 2. Limite Hauteur
-        nb_couches_geo = int((h_max - 150) // ch)
-        colis_max_geo = colis_couche * nb_couches_geo
+        # 3. Nombre de colis max autorisé par le poids
+        colis_max_poids = int(poids_autorise_pal // cp)
         
-        # 3. Bridage effectif
-        total_colis = min(colis_max_geo, colis_max_poids)
-        nb_couches_finales = total_colis // colis_couche if colis_couche > 0 else 0
+        # 4. Nombre de couches max autorisé par la hauteur
+        nb_couches_hauteur = int((h_max_rack - 150) // ch)
         
-        results[W] = {
-            "total": nb_couches_finales * colis_couche,
-            "couches": nb_couches_finales,
+        # 5. Conversion du "colis_max_poids" en couches entières
+        if colis_par_couche > 0:
+            nb_couches_poids = colis_max_poids // colis_par_couche
+        else:
+            nb_couches_poids = 0
+            
+        # --- LE BRIDAGE REEL ---
+        # On choisit le plus petit nombre de couches entre la limite hauteur et la limite poids
+        nb_couches_final = min(nb_couches_hauteur, nb_couches_poids)
+        
+        # Sécurité : Si le poids d'une seule couche dépasse déjà la limite, nb_couches = 0
+        if (colis_par_couche * cp) > poids_autorise_pal:
+            nb_couches_final = 0
+
+        final_results[W] = {
+            "total_colis": int(nb_couches_final * colis_par_couche),
+            "nb_couches": int(nb_couches_final),
             "plan": plan,
-            "nb_pal": nb_pal_sol,
-            "poids": (nb_couches_finales * colis_couche * cp) + 25,
-            "cause": "POIDS" if (colis_max_poids < colis_max_geo) else "HAUTEUR"
+            "nb_pal_sol": nb_pal_sol,
+            "poids_final_pal": (nb_couches_final * colis_par_couche * cp) + 25,
+            "cause": "POIDS" if nb_couches_poids < nb_couches_hauteur else "HAUTEUR"
         }
 
-    # Meilleure option (Volume total sur la lisse)
-    best_w = 800 if (results[800]["total"] * results[800]["nb_pal"]) >= (results[1000]["total"] * results[1000]["nb_pal"]) else 1000
+    # Sélection du meilleur support
+    best_w = 800 if (final_results[800]["total_colis"] * final_results[800]["nb_pal_sol"]) >= \
+                    (final_results[1000]["total_colis"] * final_results[1000]["nb_pal_sol"]) else 1000
     
     st.sidebar.header("📏 Support")
     target_pal = st.sidebar.selectbox("Palette", ["800x1200", "1000x1200"], index=0 if best_w==800 else 1)
     W_sel = 800 if "800" in target_pal else 1000
-    res = results[W_sel]
+    res = final_results[W_sel]
 
-    # --- Affichage ---
+    # --- AFFICHAGE ---
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Colis / Palette", res["total"])
-    m2.metric("Poids / Palette", f"{round(res['poids'], 1)} kg")
-    m3.metric("Palettes / Lisse", res["nb_pal"])
-    m4.metric("Cause Limite", res["cause"])
-
+    m1.metric("Colis / Palette", res["total_colis"])
+    m2.metric("Poids / Palette", f"{round(res['poids_final_pal'], 1)} kg")
+    m3.metric("Palettes / Lisse", res["nb_pal_sol"])
+    
+    # Indicateur de limite
     if res["cause"] == "POIDS":
-        st.error(f"🚨 BRIDAGE POIDS ACTIF : La palette est limitée à {res['couches']} couches pour ne pas dépasser la charge de la lisse.")
+        m4.metric("Limite", "🚨 POIDS", delta="Actif", delta_color="inverse")
+    else:
+        m4.metric("Limite", "OK (Hauteur)")
 
-    col_v, col_d = st.columns([2,1])
-    with col_v:
-        fig = go.Figure()
-        draw_cube(fig, [0, W_sel], [0, 1200], [0, 150], "peru")
-        for k in range(res["couches"]):
-            color = "#3498db" if k%2==0 else "#e74c3c"
+    # Affichage 3D
+    fig = go.Figure()
+    draw_cube(fig, [0, W_sel], [0, 1200], [0, 150], "peru")
+    
+    if res["nb_couches"] > 0:
+        for k in range(res["nb_couches"]):
+            color = "#3498db" if k % 2 == 0 else "#e74c3c"
             for (x, y, dx, dy) in res["plan"]:
-                z0 = 150 + (k*ch)
-                fx, fy = (W_sel+2*overhang-x-dx, 1200+2*overhang-y-dy) if k%2==1 else (x,y)
-                draw_cube(fig, [fx-overhang, fx+dx-overhang], [fy-overhang, fy+dy-overhang], [z0, z0+ch], color)
-        fig.update_layout(scene=dict(aspectmode='data'), height=600)
-        st.plotly_chart(fig, use_container_width=True)
+                z0 = 150 + (k * ch)
+                fx, fy = (W_sel + 2*overhang - x - dx, 1200 + 2*overhang - y - dy) if k % 2 == 1 else (x, y)
+                draw_cube(fig, [fx - overhang, fx + dx - overhang], [fy - overhang, fy + dy - overhang], [z0, z0 + ch], color)
+    else:
+        st.error("Impossible de poser même une seule couche sans dépasser le poids max de la lisse !")
 
-    with col_d:
-        st.write("**Récapitulatif Lisse**")
-        st.write(f"Charge totale niveau : {round(res['poids'] * res['nb_pal'], 0)} kg / {p_max_lisse} kg")
-        st.progress(min((res['poids'] * res['nb_pal']) / p_max_lisse, 1.0))
+    fig.update_layout(scene=dict(aspectmode='data'), height=600)
+    st.plotly_chart(fig, use_container_width=True)
 
-def main():
-    st.set_page_config(page_title="IA Palettisation v5.3", layout="wide")
-    menu = st.sidebar.selectbox("Menu", ["Optimiseur Simple", "Container"])
-    if menu == "Optimiseur Simple": mode_simple_valide()
-    else: st.write("Module Container - Prochaine étape.")
+    # Barre de charge réelle
+    charge_totale = res['poids_final_pal'] * res['nb_pal_sol']
+    st.write(f"Charge sur lisse : **{round(charge_totale)} kg** / {p_max_lisse} kg")
+    st.progress(min(charge_totale / p_max_lisse, 1.0))
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main_menu = st.sidebar.selectbox("Menu", ["Optimiseur Simple", "Container"])
+    if main_menu == "Optimiseur Simple":
+        mode_simple_valide()
