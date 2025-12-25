@@ -9,9 +9,7 @@ def draw_cube(fig, x_range, y_range, z_range, color, opacity=0.8):
         x=[x_min, x_max, x_max, x_min, x_min, x_max, x_max, x_min],
         y=[y_min, y_min, y_max, y_max, y_min, y_min, y_max, y_max],
         z=[z_min, z_min, z_min, z_min, z_max, z_max, z_max, z_max],
-        i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], 
-        j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], 
-        k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+        i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
         color=color, opacity=opacity, flatshading=True, showlegend=False
     ))
 
@@ -40,7 +38,6 @@ def get_mixed_layer_plan(W_max, L_max, cl, cw):
 
 def create_top_view(plan, W_pal, L_pal, W_max, L_max, overhang, is_mirrored, title, color):
     fig = go.Figure()
-    # Palette
     fig.add_shape(type="rect", x0=0, y0=0, x1=W_pal, y1=L_pal, line=dict(color="brown", width=3))
     for (x, y, dx, dy) in plan:
         if is_mirrored:
@@ -49,31 +46,27 @@ def create_top_view(plan, W_pal, L_pal, W_max, L_max, overhang, is_mirrored, tit
             fx, fy = x, y
         fig.add_shape(type="rect", x0=fx-overhang, y0=fy-overhang, x1=fx+dx-overhang, y1=fy+dy-overhang, 
                        fillcolor=color, opacity=0.7, line=dict(color="white", width=2))
-    
-    fig.update_layout(
-        title=title,
-        xaxis=dict(range=[-100, W_pal+100], constrain='domain'),
-        yaxis=dict(range=[-100, L_pal+100], scaleanchor="x", scaleratio=1),
-        width=400, height=500, margin=dict(l=10, r=10, t=40, b=10)
-    )
+    fig.update_layout(title=title, xaxis=dict(range=[-100, W_pal+100]), yaxis=dict(range=[-100, L_pal+100], scaleanchor="x", scaleratio=1), width=400, height=500)
     return fig
 
 def generate_pallet_plan():
-    st.set_page_config(page_title="IA Palettisation", layout="wide")
+    st.set_page_config(page_title="IA Palettisation v3.3", layout="wide")
     
     # --- Sidebar ---
-    st.sidebar.header("📦 Colis")
-    cl = st.sidebar.number_input("Longueur (mm)", value=400)
-    cw = st.sidebar.number_input("Largeur (mm)", value=300)
-    ch = st.sidebar.number_input("Hauteur (mm)", value=250)
-    cp = st.sidebar.number_input("Poids (kg)", value=10.0)
-    overhang = st.sidebar.slider("Débordement (mm)", 0, 50, 0)
+    st.sidebar.header("📦 Produit & Commande")
+    cl = st.sidebar.number_input("Longueur Carton (mm)", value=400)
+    cw = st.sidebar.number_input("Largeur Carton (mm)", value=300)
+    ch = st.sidebar.number_input("Hauteur Carton (mm)", value=250)
+    cp = st.sidebar.number_input("Poids Carton (kg)", value=10.0)
+    total_colis_a_faire = st.sidebar.number_input("Nombre de colis total", value=100)
     
-    st.sidebar.header("🏗️ Rack")
+    st.sidebar.header("🏗️ Stockage & Lisse")
+    l_lisse = st.sidebar.selectbox("Longueur de lisse (mm)", [2700, 3600, 1350])
     h_lisse = st.sidebar.number_input("Hauteur entre lisses (mm)", value=1800)
+    overhang = st.sidebar.slider("Débordement autorisé (mm)", 0, 50, 0)
     
     st.sidebar.header("📏 Palette")
-    target_pal = st.sidebar.selectbox("Format", ["800x1200", "1000x1200"])
+    target_pal = st.sidebar.selectbox("Format", ["800x1200 (Europe)", "1000x1200 (VMF)"])
     W_pal = 800 if "800" in target_pal else 1000
     L_pal = 1200
     
@@ -81,43 +74,51 @@ def generate_pallet_plan():
     W_max, L_max = W_pal + (2 * overhang), L_pal + (2 * overhang)
     plan_couche = get_mixed_layer_plan(W_max, L_max, cl, cw)
     nb_couches = int((h_lisse - 250) // ch) 
+    colis_par_pal = len(plan_couche) * nb_couches
     
-    st.title(f"Plan de Palettisation Expert : {len(plan_couche) * nb_couches} colis")
+    # Calcul besoin global
+    nb_palettes_totales = -(-total_colis_a_faire // colis_par_pal) # Arrondi supérieur
+    ml_total = (nb_palettes_totales * W_pal) / 1000 if W_pal == 800 else (nb_palettes_totales * 1000) / 1000
+    # Note : Le ML se calcule souvent sur la base de la largeur engagée (0.8m pour une euro en 80x120)
+    ml_reel = round(nb_palettes_totales * (W_pal / 1000) / (l_lisse // W_pal), 2)
+
+    # --- Interface ---
+    st.title("🚀 Optimisation de Chargement & Stockage")
+    
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Colis / Palette", colis_par_pal)
+    m2.metric("Total Palettes", nb_palettes_totales)
+    m3.metric("Mètres Linéaires (ML)", f"{round((nb_palettes_totales * W_pal / 1000), 2)} m")
+    m4.metric("Palettes / Lisse", int(l_lisse // W_pal))
 
     # --- Rendu 3D ---
-    fig3d = go.Figure()
-    draw_cube(fig3d, [0, W_pal], [0, L_pal], [0, 150], "peru")
-    colors = ["#3498db", "#e74c3c", "#2ecc71", "#f1c40f", "#9b59b6"]
+    col_v, col_t = st.columns([2, 1])
+    with col_v:
+        fig3d = go.Figure()
+        draw_cube(fig3d, [0, W_pal], [0, L_pal], [0, 150], "peru")
+        colors = ["#3498db", "#e74c3c", "#2ecc71", "#f1c40f", "#9b59b6"]
+        for k in range(nb_couches):
+            color = colors[k % len(colors)]
+            for (x, y, dx, dy) in plan_couche:
+                z0 = 150 + (k * ch)
+                fx, fy = ((W_max - x - dx), (L_max - y - dy)) if k % 2 == 1 else (x, y)
+                draw_cube(fig3d, [fx-overhang, fx+dx-overhang], [fy-overhang, fy+dy-overhang], [z0, z0+ch], color)
+        fig3d.update_layout(scene=dict(aspectmode='data'), height=500, margin=dict(l=0,r=0,b=0,t=0))
+        st.plotly_chart(fig3d, use_container_width=True)
     
-    for k in range(nb_couches):
-        color = colors[k % len(colors)]
-        for (x, y, dx, dy) in plan_couche:
-            z0 = 150 + (k * ch)
-            is_mirrored = (k % 2 == 1)
-            if is_mirrored:
-                fx, fy = (W_max - x - dx), (L_max - y - dy)
-            else:
-                fx, fy = x, y
-            draw_cube(fig3d, [fx-overhang, fx+dx-overhang], [fy-overhang, fy+dy-overhang], [z0, z0+ch], color)
-    
-    fig3d.update_layout(scene=dict(aspectmode='data'), height=600, margin=dict(l=0,r=0,b=0,t=0))
-    st.plotly_chart(fig3d, use_container_width=True)
+    with col_t:
+        st.write("**Récapitulatif Technique**")
+        st.info(f"Pour {total_colis_a_faire} colis, vous devez préparer {nb_palettes_totales} palettes.")
+        if l_lisse % W_pal > 100:
+            st.warning(f"Perte de place sur lisse : {l_lisse % W_pal} mm inutilisés.")
 
-    # --- Vues de dessus côte à côte ---
+    # --- Vues de dessus ---
     st.divider()
-    st.subheader("Plans de pose par étage (Echelle 1:1)")
     c1, c2 = st.columns(2)
-    
     with c1:
-        fig_layer1 = create_top_view(plan_couche, W_pal, L_pal, W_max, L_max, overhang, False, "Étages Impairs (1, 3, 5...)", "#3498db")
-        st.plotly_chart(fig_layer1)
-        
+        st.plotly_chart(create_top_view(plan_couche, W_pal, L_pal, W_max, L_max, overhang, False, "Couches Impaires", "#3498db"))
     with c2:
-        if nb_couches > 1:
-            fig_layer2 = create_top_view(plan_couche, W_pal, L_pal, W_max, L_max, overhang, True, "Étages Pairs (2, 4, 6...)", "#e74c3c")
-            st.plotly_chart(fig_layer2)
-        else:
-            st.info("Une seule couche prévue.")
+        st.plotly_chart(create_top_view(plan_couche, W_pal, L_pal, W_max, L_max, overhang, True, "Couches Pairs", "#e74c3c"))
 
 if __name__ == "__main__":
     generate_pallet_plan()
