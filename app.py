@@ -10,7 +10,6 @@ st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
     .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    .stInfo { border-left: 5px solid #2196F3; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -42,12 +41,20 @@ def get_layer_plan(W_max, L_max, cl, cw):
 
 def create_top_view(plan, w_pal, w_max_c, l_max_c, overhang, mirrored, title, color):
     fig = go.Figure()
+    # Dessin du support (Palette)
     fig.add_shape(type="rect", x0=0, y0=0, x1=w_pal, y1=1200, line=dict(color="#5D4037", width=4))
+    # Dessin des colis
     for (x, y, dx, dy) in plan:
         fx, fy = (w_max_c - x - dx, l_max_c - y - dy) if mirrored else (x, y)
         fig.add_shape(type="rect", x0=fx-overhang, y0=fy-overhang, x1=fx+dx-overhang, y1=fy+dy-overhang, 
-                       fillcolor=color, opacity=0.6, line=dict(color="white", width=1))
-    fig.update_layout(title=dict(text=title, x=0.5), xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x"), margin=dict(l=10,r=10,t=40,b=10), height=300, plot_bgcolor='rgba(0,0,0,0)')
+                       fillcolor=color, opacity=0.7, line=dict(color="white", width=1))
+    
+    fig.update_layout(
+        title=dict(text=title, x=0.5),
+        xaxis=dict(visible=False, range=[-100, w_pal+100]),
+        yaxis=dict(visible=False, range=[-100, 1300], scaleanchor="x"),
+        margin=dict(l=10, r=10, t=40, b=10), height=350, plot_bgcolor='rgba(0,0,0,0)'
+    )
     return fig
 
 def calculate_best_fit(W_pal, l_lisse, h_max, cl, cw, ch, cp, p_max_lisse, overhang):
@@ -55,20 +62,26 @@ def calculate_best_fit(W_pal, l_lisse, h_max, cl, cw, ch, cp, p_max_lisse, overh
     poids_max_par_pal = (p_max_lisse / nb_pal_sol) - 25
     plan = get_layer_plan(W_pal + 2*overhang, 1200 + 2*overhang, cl, cw)
     colis_par_couche = len(plan)
+    
     if colis_par_couche == 0: return {"total": 0, "couches": 0, "plan": [], "nb_pal_sol": nb_pal_sol, "poids": 25, "cause": "DIM"}
+    
     nb_couches_h = int((h_max - 150) // ch)
     nb_couches_p = int((poids_max_par_pal // cp) // colis_par_couche) if cp > 0 else 99
+    
     nb_final = max(0, min(nb_couches_h, nb_couches_p))
+    cause = "POIDS ⚖️" if nb_couches_p < nb_couches_h else "HAUTEUR 📏"
+    
     return {
         "total": int(nb_final * colis_par_couche),
         "couches": int(nb_final),
         "plan": plan,
         "nb_pal_sol": nb_pal_sol,
         "poids": (nb_final * colis_par_couche * cp) + 25,
-        "cause": "POIDS" if nb_couches_p < nb_couches_h else "HAUTEUR"
+        "cause": cause,
+        "colis_par_couche": colis_par_couche
     }
 
-# --- MODE 1 : OPTIMISEUR SIMPLE (DESIGN RESTAURÉ) ---
+# --- MODE 1 : OPTIMISEUR SIMPLE ---
 
 def mode_simple():
     st.header("📦 Optimiseur de Palettisation Simple")
@@ -91,26 +104,31 @@ def mode_simple():
     c1.metric("Colis / Palette", res["total"])
     c2.metric("Poids / Palette", f"{round(res['poids'], 1)} kg")
     c3.metric("Palettes / Lisse", res["nb_pal_sol"])
-    c4.metric("Limite", res["cause"])
+    c4.metric("Facteur Limitant", res["cause"])
 
     tab1, tab2 = st.tabs(["📊 Vue 3D Interactive", "📋 Plans de Montage 2D"])
+    
     with tab1:
-        fig = go.Figure()
-        draw_cube(fig, 0, w_pal, 0, 1200, 0, 150, "#8D6E63")
+        fig3d = go.Figure()
+        draw_cube(fig3d, 0, w_pal, 0, 1200, 0, 150, "#8D6E63")
         for k in range(res["couches"]):
             color = "#2196F3" if k % 2 == 0 else "#EF5350"
             for (x, y, dx, dy) in res["plan"]:
                 z0 = 150 + (k * ch)
                 fx, fy = (w_pal + 2*overhang - x - dx, 1200 + 2*overhang - y - dy) if k % 2 == 1 else (x, y)
-                draw_cube(fig, fx-overhang, fx+dx-overhang, fy-overhang, fy+dy-overhang, z0, z0+ch, color)
-        fig.update_layout(scene=dict(aspectmode='data'), height=600, margin=dict(l=0,r=0,b=0,t=0))
-        st.plotly_chart(fig, use_container_width=True)
+                draw_cube(fig3d, fx-overhang, fx+dx-overhang, fy-overhang, fy+dy-overhang, z0, z0+ch, color)
+        fig3d.update_layout(scene=dict(aspectmode='data'), height=600, margin=dict(l=0,r=0,b=0,t=0))
+        st.plotly_chart(fig3d, use_container_width=True)
+    
     with tab2:
+        st.write("### Schémas de Pose par Étage")
         v1, v2 = st.columns(2)
-        v1.plotly_chart(create_top_view(res["plan"], w_pal, w_pal+2*overhang, 1200+2*overhang, overhang, False, "Couches IMPAIRES", "#2196F3"))
-        v2.plotly_chart(create_top_view(res["plan"], w_pal, w_pal+2*overhang, 1200+2*overhang, overhang, True, "Couches PAIRES", "#EF5350"))
+        with v1:
+            st.plotly_chart(create_top_view(res["plan"], w_pal, w_pal+2*overhang, 1200+2*overhang, overhang, False, "Couches IMPAIRES (1, 3, 5...)", "#2196F3"), use_container_width=True)
+        with v2:
+            st.plotly_chart(create_top_view(res["plan"], w_pal, w_pal+2*overhang, 1200+2*overhang, overhang, True, "Couches PAIRES (2, 4, 6...)", "#EF5350"), use_container_width=True)
 
-# --- MODE 2 : CONTAINER (STRATÉGIE MIXITÉ) ---
+# --- MODE 2 : CONTAINER ---
 
 def mode_container():
     st.header("🚢 Gestion de Déchargement Container")
@@ -120,7 +138,6 @@ def mode_container():
         h_max_rack = st.number_input("Haut. Max (mm)", value=1800, key="c_hmax")
         target_w = st.radio("Support de référence", [800, 1000], horizontal=True)
 
-    st.write("### 📥 Import Packing List")
     uploaded = st.file_uploader("Fichier CSV", type=['csv'])
     df = pd.read_csv(uploaded) if uploaded else pd.DataFrame([
         {"Référence": "REF_A", "Long": 400, "Larg": 300, "Haut": 250, "Poids": 12, "Quantité": 145},
@@ -128,58 +145,36 @@ def mode_container():
     ])
     df_c = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
-    # --- CALCULS LOGIQUE MIXTE ---
-    reliquats, palettes_pleines = [], []
+    # Logique de calcul lisses (FFD Algorithm)
+    all_pals = []
     for _, r in df_c.iterrows():
         res = calculate_best_fit(target_w, l_lisse, h_max_rack, r['Long'], r['Larg'], r['Haut'], r['Poids'], p_max_lisse, 0)
         if res['total'] > 0:
             nb_pleines = r['Quantité'] // res['total']
+            for _ in range(int(nb_pleines)): all_pals.append(res['poids'])
             reste = r['Quantité'] % res['total']
-            if nb_pleines > 0:
-                palettes_pleines.append({"Réf": r['Référence'], "Nombre": int(nb_pleines), "Poids_Unitaire": res['poids']})
-            if reste > 0:
-                reliquats.append({"Réf": r['Référence'], "Quantité": reste, "Poids_Total": reste * r['Poids']})
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.write("**📦 Palettes Complètes**")
-        if palettes_pleines: st.dataframe(pd.DataFrame(palettes_pleines), hide_index=True)
-    with c2:
-        st.write("**🧪 Analyse des Reliquats**")
-        if reliquats: st.dataframe(pd.DataFrame(reliquats), hide_index=True)
-
-    # --- OPTIMISATION LISSES ---
-    st.write("### 🏢 Optimisation de l'Espace (Rangement par Lisse)")
-    all_pals = []
-    for p in palettes_pleines:
-        for _ in range(p['Nombre']): all_pals.append(p['Poids_Unitaire'])
-    if reliquats: 
-        poids_mix = sum(d['Poids_Total'] for d in reliquats) + 25
-        all_pals.append(poids_mix)
+            if reste > 0: all_pals.append((reste * r['Poids']) + 25)
     
     all_pals.sort(reverse=True)
     nb_pals_par_lisse = int(l_lisse // target_w)
-    lisses_utilisees = []
-    temp_pals = all_pals.copy()
-    
-    while temp_pals:
-        lisse_actuelle = []
+    lisses = []
+    while all_pals:
+        lisse = []
         for _ in range(nb_pals_par_lisse):
-            for i, p_w in enumerate(temp_pals):
-                if sum(lisse_actuelle) + p_w <= p_max_lisse:
-                    lisse_actuelle.append(temp_pals.pop(i))
+            for i, p_w in enumerate(all_pals):
+                if sum(lisse) + p_w <= p_max_lisse:
+                    lisse.append(all_pals.pop(i))
                     break
             else: break
-        lisses_utilisees.append(lisse_actuelle)
+        lisses.append(lisse)
 
-    st.metric("Nombre d'emplacements (lisses) nécessaires", len(lisses_utilisees))
-    for i, l in enumerate(lisses_utilisees):
+    st.metric("Nombre d'emplacements lisses nécessaires", len(lisses))
+    for i, l in enumerate(lisses):
         cols = st.columns(nb_pals_par_lisse)
         for idx, p_w in enumerate(l):
             cols[idx].info(f"Pal {idx+1}: {round(p_w)} kg")
-        st.progress(sum(l)/p_max_lisse, text=f"Lisse {i+1} : {round(sum(l))} kg / {p_max_lisse} kg")
+        st.progress(sum(l)/p_max_lisse, text=f"Charge Lisse {i+1} : {round(sum(l))} / {p_max_lisse} kg")
 
-# --- NAVIGATION ---
 def main():
     menu = st.sidebar.radio("Navigation", ["Optimiseur Simple", "Container"])
     if menu == "Optimiseur Simple": mode_simple()
