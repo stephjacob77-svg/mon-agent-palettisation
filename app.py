@@ -119,9 +119,10 @@ def mode_container():
     st.header("🚢 Gestion de Déchargement Container")
     
     with st.sidebar:
-        l_lisse = st.selectbox("Lisse Stockage (mm)", [2700, 3600, 1350])
-        p_max_lisse = st.number_input("Capacité Lisse (kg)", value=3000)
-        h_max_rack = st.number_input("Haut. Max (mm)", value=1800)
+        l_lisse = st.selectbox("Lisse Stockage (mm)", [2700, 3600, 1350], key="c_lisse")
+        p_max_lisse = st.number_input("Capacité Lisse (kg)", value=3000, key="c_pmax")
+        h_max_rack = st.number_input("Haut. Max (mm)", value=1800, key="c_hmax")
+        target_w = st.radio("Support de référence", [800, 1000], horizontal=True)
 
     st.write("### 📥 Import Packing List")
     uploaded = st.file_uploader("Fichier CSV", type=['csv'])
@@ -129,37 +130,97 @@ def mode_container():
         df = pd.read_csv(uploaded)
     else:
         df = pd.DataFrame([
-            {"Référence": "REF_A", "Long": 400, "Larg": 300, "Haut": 250, "Poids": 12, "Quantité": 100},
-            {"Référence": "REF_B", "Long": 600, "Larg": 400, "Haut": 300, "Poids": 15, "Quantité": 50}
+            {"Référence": "REF_A", "Long": 400, "Larg": 300, "Haut": 250, "Poids": 12, "Quantité": 145},
+            {"Référence": "REF_B", "Long": 600, "Larg": 400, "Haut": 300, "Poids": 15, "Quantité": 55}
         ])
     
     df_c = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
-    # Comparaison Stratégique
-    p800 = 0
-    p1000 = 0
-    for _, r in df_c.iterrows():
-        res8 = calculate_best_fit(800, l_lisse, h_max_rack, r['Long'], r['Larg'], r['Haut'], r['Poids'], p_max_lisse, 0)
-        res1 = calculate_best_fit(1000, l_lisse, h_max_rack, r['Long'], r['Larg'], r['Haut'], r['Poids'], p_max_lisse, 0)
-        if res8['total'] > 0: p800 += math.ceil(r['Quantité'] / res8['total'])
-        if res1['total'] > 0: p1000 += math.ceil(r['Quantité'] / res1['total'])
-
-    st.info(f"💡 Analyse : 800x1200 = {p800} pals | 1000x1200 = {p1000} pals")
+    # --- CALCUL DE MIXITÉ ---
+    st.write("### 🧩 Optimisation des Reliquats & Lisses")
     
-    st.write("### 📋 Fiches de Déchargement")
-    for _, row in df_c.iterrows():
-        with st.expander(f"Référence {row['Référence']}"):
-            st.write(f"Quantité totale : {row['Quantité']} colis")
-            # Ici on pourra ajouter les boutons PDF et plans spécifiques
+    reliquats = []
+    palettes_pleines = []
 
-# --- MAIN NAVIGATION ---
+    for _, r in df_c.iterrows():
+        res = calculate_best_fit(target_w, l_lisse, h_max_rack, r['Long'], r['Larg'], r['Haut'], r['Poids'], p_max_lisse, 0)
+        
+        if res['total'] > 0:
+            nb_pleines = r['Quantité'] // res['total']
+            reste = r['Quantité'] % res['total']
+            
+            if nb_pleines > 0:
+                palettes_pleines.append({
+                    "Réf": r['Référence'], 
+                    "Nombre": int(nb_pleines), 
+                    "Poids_Unitaire": res['poids'],
+                    "Type": "Pleine"
+                })
+            
+            if reste > 0:
+                reliquats.append({
+                    "Réf": r['Référence'], 
+                    "Quantité": reste, 
+                    "Poids_Total": reste * r['Poids'],
+                    "Haut_Totale": (reste / (res['total']/res['couches'])) * r['Haut']
+                })
 
-def main():
-    menu = st.sidebar.radio("Navigation", ["Optimiseur Simple", "Container"])
-    if menu == "Optimiseur Simple":
-        mode_simple()
-    else:
-        mode_container()
+    # Affichage des palettes pleines
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("**📦 Palettes Complètes**")
+        df_pleines = pd.DataFrame(palettes_pleines)
+        if not df_pleines.empty:
+            st.dataframe(df_pleines, hide_index=True)
+    
+    with c2:
+        st.write("**🧪 Analyse des Reliquats**")
+        if reliquats:
+            df_rel = pd.DataFrame(reliquats)
+            st.dataframe(df_rel, hide_index=True)
+            
+            # Simulation simple de mixité
+            poids_mix = sum(d['Poids_Total'] for d in reliquats) + 25
+            if poids_mix < (p_max_lisse / (l_lisse//target_w)):
+                st.success(f"💡 Suggestion : Mixer les {len(reliquats)} reliquats sur 1 seule palette mixte (Poids estimé : {round(poids_mix)} kg)")
+            else:
+                st.warning("⚠️ Reliquats trop lourds pour être mixés sur une seule palette.")
 
-if __name__ == "__main__":
-    main()
+    # --- OPTIMISATION DES LISSES (APPAIRAGE) ---
+    st.write("### 🏢 Plan de Chargement Lisses (Optimisation ML)")
+    
+    # On crée une liste de toutes les palettes à ranger (Pleines + Mixtes)
+    all_pals = []
+    for p in palettes_pleines:
+        for _ in range(p['Nombre']): all_pals.append(p['Poids_Unitaire'])
+    if reliquats: all_pals.append(poids_mix)
+    
+    # Tri des palettes par poids décroissant pour l'algorithme "First Fit Decreasing"
+    all_pals.sort(reverse=True)
+    
+    nb_pals_par_lisse = int(l_lisse // target_w)
+    lisses_utilisees = []
+    
+    # Simulation du rangement
+    temp_pals = all_pals.copy()
+    while temp_pals:
+        lisse_actuelle = []
+        for _ in range(nb_pals_par_lisse):
+            if temp_pals:
+                # On cherche la palette qui complète le mieux sans dépasser p_max_lisse
+                for i, p_weight in enumerate(temp_pals):
+                    if sum(lisse_actuelle) + p_weight <= p_max_lisse:
+                        lisse_actuelle.append(temp_pals.pop(i))
+                        break
+                else: # Si aucune ne rentre, on laisse vide
+                    break
+        lisses_utilisees.append(lisse_actuelle)
+
+    st.metric("Nombre d'emplacements (lisses) nécessaires", len(lisses_utilisees))
+    
+    # Visuel des lisses
+    for i, l in enumerate(lisses_utilisees):
+        cols = st.columns(nb_pals_par_lisse)
+        for idx, p_w in enumerate(l):
+            cols[idx].info(f"Pal {idx+1}: {round(p_w)} kg")
+        st.progress(sum(l)/p_max_lisse, text=f"Lisse {i+1} : {round(sum(l))} kg / {p_max_lisse} kg")
