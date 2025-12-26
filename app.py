@@ -1,8 +1,10 @@
 import streamlit as st
 import plotly.graph_objects as go
+import pandas as pd
+import math
 
 # --- CONFIGURATION ET STYLE ---
-st.set_page_config(page_title="Expert Palettisation v6.0", layout="wide")
+st.set_page_config(page_title="Expert Palettisation Hub", layout="wide")
 
 st.markdown("""
     <style>
@@ -12,7 +14,8 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- FONCTIONS TECHNIQUES ---
+# --- FONCTIONS TECHNIQUES (MOTEUR DE CALCUL) ---
+
 def draw_cube(fig, x_min, x_max, y_min, y_max, z_min, z_max, color, opacity=0.8):
     fig.add_trace(go.Mesh3d(
         x=[x_min, x_max, x_max, x_min, x_min, x_max, x_max, x_min],
@@ -35,104 +38,128 @@ def get_layer_plan(W_max, L_max, cl, cw):
 
 def create_top_view(plan, w_pal, w_max_c, l_max_c, overhang, mirrored, title, color):
     fig = go.Figure()
-    # Palette
     fig.add_shape(type="rect", x0=0, y0=0, x1=w_pal, y1=1200, line=dict(color="#5D4037", width=4))
-    # Colis
     for (x, y, dx, dy) in plan:
         fx, fy = (w_max_c - x - dx, l_max_c - y - dy) if mirrored else (x, y)
         fig.add_shape(type="rect", x0=fx-overhang, y0=fy-overhang, x1=fx+dx-overhang, y1=fy+dy-overhang, 
                        fillcolor=color, opacity=0.6, line=dict(color="white", width=1))
-    
-    fig.update_layout(
-        title=dict(text=title, x=0.5, font=dict(size=14)),
-        xaxis=dict(range=[-100, w_pal+100], visible=False),
-        yaxis=dict(range=[-100, 1300], visible=False, scaleanchor="x", scaleratio=1),
-        margin=dict(l=10, r=10, t=40, b=10), height=350, plot_bgcolor='rgba(0,0,0,0)'
-    )
+    fig.update_layout(title=dict(text=title, x=0.5), xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x"), margin=dict(l=10,r=10,t=40,b=10), height=300, plot_bgcolor='rgba(0,0,0,0)')
     return fig
 
-# --- LOGIQUE PRINCIPALE ---
-def main():
-    st.title("🏗️ Warehouse Optimization Tool")
-    
-    with st.sidebar:
-        st.header("⚙️ Paramètres")
-        with st.expander("Rack & Lisse", expanded=True):
-            l_lisse = st.selectbox("Longueur de lisse (mm)", [2700, 3600, 1350])
-            p_max_lisse = st.number_input("Poids max Lisse (kg)", value=3000)
-            h_max_rack = st.number_input("Hauteur Max Rack (mm)", value=1800)
-        
-        with st.expander("Dimensions Colis", expanded=True):
-            cl = st.number_input("Longueur (mm)", value=400)
-            cw = st.number_input("Largeur (mm)", value=300)
-            ch = st.number_input("Hauteur (mm)", value=250)
-            cp = st.number_input("Poids (kg)", value=12.0)
-            overhang = st.slider("Débordement (mm)", 0, 50, 0)
-        
-        target_pal = st.selectbox("Type de Palette", ["800x1200 (Euro)", "1000x1200 (VMF)"])
-        w_pal = 800 if "800" in target_pal else 1000
-
-    # --- CALCULS ---
-    nb_pal_sol = int(l_lisse // w_pal)
+def calculate_best_fit(W_pal, l_lisse, h_max, cl, cw, ch, cp, p_max_lisse, overhang):
+    """Calcule le bridage réel poids/hauteur"""
+    nb_pal_sol = int(l_lisse // W_pal)
     poids_max_par_pal = (p_max_lisse / nb_pal_sol) - 25
-    colis_max_poids = int(poids_max_par_pal // cp)
-    
-    w_max_c, l_max_c = w_pal + 2*overhang, 1200 + 2*overhang
-    plan = get_layer_plan(w_max_c, l_max_c, cl, cw)
+    plan = get_layer_plan(W_pal + 2*overhang, 1200 + 2*overhang, cl, cw)
     colis_par_couche = len(plan)
     
-    nb_couches_h = int((h_max_rack - 150) // ch)
-    nb_couches_p = (colis_max_poids // colis_par_couche) if colis_par_couche > 0 else 0
+    if colis_par_couche == 0: return {"total": 0, "couches": 0, "plan": [], "nb_pal_sol": nb_pal_sol, "poids": 25, "cause": "DIM"}
     
-    nb_couches_final = min(nb_couches_h, nb_couches_p)
-    colis_total = nb_couches_final * colis_par_couche
-    poids_total_pal = (colis_total * cp) + 25
+    nb_couches_h = int((h_max - 150) // ch)
+    nb_couches_p = int((poids_max_par_pal // cp) // colis_par_couche) if cp > 0 else 99
+    
+    nb_final = min(nb_couches_h, nb_couches_p)
+    if (colis_par_couche * cp) > poids_max_par_pal: nb_final = 0
+    
+    return {
+        "total": int(nb_final * colis_par_couche),
+        "couches": int(nb_final),
+        "plan": plan,
+        "nb_pal_sol": nb_pal_sol,
+        "poids": (nb_final * colis_par_couche * cp) + 25,
+        "cause": "POIDS" if nb_couches_p < nb_couches_h else "HAUTEUR"
+    }
 
-    # --- AFFICHAGE DASHBOARD ---
+# --- MODE 1 : OPTIMISEUR SIMPLE ---
+
+def mode_simple():
+    st.header("📦 Optimiseur de Palettisation Simple")
+    
+    with st.sidebar:
+        st.subheader("⚙️ Paramètres")
+        l_lisse = st.selectbox("Longueur de lisse (mm)", [2700, 3600, 1350])
+        p_max_lisse = st.number_input("Poids max Lisse (kg)", value=3000)
+        h_max_rack = st.number_input("Hauteur Max Rack (mm)", value=1800)
+        cl = st.number_input("Long. (mm)", value=400)
+        cw = st.number_input("Larg. (mm)", value=300)
+        ch = st.number_input("Haut. (mm)", value=250)
+        cp = st.number_input("Poids (kg)", value=12.0)
+        overhang = st.slider("Débordement (mm)", 0, 50, 0)
+        target_pal = st.selectbox("Type de Palette", ["800x1200", "1000x1200"])
+        w_pal = 800 if "800" in target_pal else 1000
+
+    res = calculate_best_fit(w_pal, l_lisse, h_max_rack, cl, cw, ch, cp, p_max_lisse, overhang)
+    
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Colis / Palette", colis_total)
-    c2.metric("Poids / Palette", f"{round(poids_total_pal, 1)} kg")
-    c3.metric("Palettes / Niveau", nb_pal_sol)
-    
-    charge_perc = (poids_total_pal * nb_pal_sol) / p_max_lisse
-    c4.metric("Occupation Lisse", f"{round(charge_perc*100)} %")
+    c1.metric("Colis / Palette", res["total"])
+    c2.metric("Poids / Palette", f"{round(res['poids'], 1)} kg")
+    c3.metric("Palettes / Lisse", res["nb_pal_sol"])
+    c4.metric("Limite", res["cause"])
 
-    if nb_couches_p < nb_couches_h:
-        st.warning(f"⚠️ Limitation par le poids : {nb_couches_final} couches max autorisées.")
-
-    # --- VUES ---
-    tab1, tab2 = st.tabs(["📊 Vue 3D Interactive", "📋 Plans de Montage 2D"])
-    
+    tab1, tab2 = st.tabs(["📊 Vue 3D", "📋 Plans 2D"])
     with tab1:
-        col_3d, col_info = st.columns([2, 1])
-        with col_3d:
-            fig3d = go.Figure()
-            draw_cube(fig3d, 0, w_pal, 0, 1200, 0, 150, "#8D6E63", 1) # Palette
-            for k in range(nb_couches_final):
-                color = "#2196F3" if k % 2 == 0 else "#EF5350"
-                for (x, y, dx, dy) in plan:
-                    z0 = 150 + (k * ch)
-                    fx, fy = (w_max_c - x - dx, l_max_c - y - dy) if k % 2 == 1 else (x, y)
-                    draw_cube(fig3d, fx-overhang, fx+dx-overhang, fy-overhang, fy+dy-overhang, z0, z0+ch, color)
-            fig3d.update_layout(scene=dict(aspectmode='data'), height=600, margin=dict(l=0,r=0,b=0,t=0))
-            st.plotly_chart(fig3d, use_container_width=True)
-        
-        with col_info:
-            st.write("### Détails Logistiques")
-            st.write(f"**Format :** {target_pal}")
-            st.write(f"**Hauteur Totale :** {150 + (nb_couches_final * ch)} mm")
-            st.write(f"**Charge Totale Lisse :** {round(poids_total_pal * nb_pal_sol)} kg")
-            st.progress(min(charge_perc, 1.0))
-            if st.button("Exporter les données"):
-                st.toast("Préparation du rapport...")
-
+        fig = go.Figure()
+        draw_cube(fig, 0, w_pal, 0, 1200, 0, 150, "#8D6E63")
+        for k in range(res["couches"]):
+            color = "#2196F3" if k % 2 == 0 else "#EF5350"
+            for (x, y, dx, dy) in res["plan"]:
+                z0 = 150 + (k * ch)
+                fx, fy = (w_pal + 2*overhang - x - dx, 1200 + 2*overhang - y - dy) if k % 2 == 1 else (x, y)
+                draw_cube(fig, fx-overhang, fx+dx-overhang, fy-overhang, fy+dy-overhang, z0, z0+ch, color)
+        fig.update_layout(scene=dict(aspectmode='data'), height=600)
+        st.plotly_chart(fig, use_container_width=True)
     with tab2:
-        st.write("### Schémas de Pose par Étage")
         v1, v2 = st.columns(2)
-        with v1:
-            st.plotly_chart(create_top_view(plan, w_pal, w_max_c, l_max_c, overhang, False, "Couches IMPAIRES (1, 3, 5...)", "#2196F3"), use_container_width=True)
-        with v2:
-            st.plotly_chart(create_top_view(plan, w_pal, w_max_c, l_max_c, overhang, True, "Couches PAIRES (2, 4, 6...)", "#EF5350"), use_container_width=True)
+        v1.plotly_chart(create_top_view(res["plan"], w_pal, w_pal+2*overhang, 1200+2*overhang, overhang, False, "Impair", "#2196F3"))
+        v2.plotly_chart(create_top_view(res["plan"], w_pal, w_pal+2*overhang, 1200+2*overhang, overhang, True, "Pair", "#EF5350"))
+
+# --- MODE 2 : CONTAINER ---
+
+def mode_container():
+    st.header("🚢 Gestion de Déchargement Container")
+    
+    with st.sidebar:
+        l_lisse = st.selectbox("Lisse Stockage (mm)", [2700, 3600, 1350])
+        p_max_lisse = st.number_input("Capacité Lisse (kg)", value=3000)
+        h_max_rack = st.number_input("Haut. Max (mm)", value=1800)
+
+    st.write("### 📥 Import Packing List")
+    uploaded = st.file_uploader("Fichier CSV", type=['csv'])
+    if uploaded:
+        df = pd.read_csv(uploaded)
+    else:
+        df = pd.DataFrame([
+            {"Référence": "REF_A", "Long": 400, "Larg": 300, "Haut": 250, "Poids": 12, "Quantité": 100},
+            {"Référence": "REF_B", "Long": 600, "Larg": 400, "Haut": 300, "Poids": 15, "Quantité": 50}
+        ])
+    
+    df_c = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+
+    # Comparaison Stratégique
+    p800 = 0
+    p1000 = 0
+    for _, r in df_c.iterrows():
+        res8 = calculate_best_fit(800, l_lisse, h_max_rack, r['Long'], r['Larg'], r['Haut'], r['Poids'], p_max_lisse, 0)
+        res1 = calculate_best_fit(1000, l_lisse, h_max_rack, r['Long'], r['Larg'], r['Haut'], r['Poids'], p_max_lisse, 0)
+        if res8['total'] > 0: p800 += math.ceil(r['Quantité'] / res8['total'])
+        if res1['total'] > 0: p1000 += math.ceil(r['Quantité'] / res1['total'])
+
+    st.info(f"💡 Analyse : 800x1200 = {p800} pals | 1000x1200 = {p1000} pals")
+    
+    st.write("### 📋 Fiches de Déchargement")
+    for _, row in df_c.iterrows():
+        with st.expander(f"Référence {row['Référence']}"):
+            st.write(f"Quantité totale : {row['Quantité']} colis")
+            # Ici on pourra ajouter les boutons PDF et plans spécifiques
+
+# --- MAIN NAVIGATION ---
+
+def main():
+    menu = st.sidebar.radio("Navigation", ["Optimiseur Simple", "Container"])
+    if menu == "Optimiseur Simple":
+        mode_simple()
+    else:
+        mode_container()
 
 if __name__ == "__main__":
     main()
