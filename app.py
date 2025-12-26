@@ -3,15 +3,16 @@ import plotly.graph_objects as go
 import pandas as pd
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Expert WMS Pro v9.7.1 - FINAL ALIGN", layout="wide")
+st.set_page_config(page_title="Expert WMS Pro v9.8", layout="wide")
 
-# Versionning ultra-visible pour éviter les erreurs de cache
-st.markdown("<h1 style='color: #FF4B4B;'>VERSION 9.7.1 - ALIGNEMENT EXTRÉMITÉS FIXE</h1>", unsafe_allow_html=True)
+# --- GESTION DU CATALOGUE (ÉTAT SESSION) ---
+if 'catalogue' not in st.session_state:
+    st.session_state.catalogue = pd.DataFrame([
+        {"REF": "CARTON_A", "L": 300, "W": 200, "H": 150, "P": 12.0},
+        {"REF": "CARTON_B", "L": 400, "W": 300, "H": 200, "P": 18.5}
+    ])
 
-if 'db_refs' not in st.session_state:
-    st.session_state.db_refs = pd.DataFrame([{"Référence":"BOX_STANDARD", "L":300, "W":200, "H":150, "P":15.0}])
-
-# --- MOTEUR D'OPTIMISATION ---
+# --- MOTEUR DE CALCUL TETRIS ---
 def get_optimal_layer(W_pal, L_pal, cl, cw):
     def strategy(W, L, c_l, c_w):
         plan = []
@@ -49,64 +50,98 @@ def draw_real_pallet(fig, x_off, w_p, l_p, z_off, color="#8D6E63"):
     draw_box(fig, x_off, x_off+w_p, 0, l_p, z_off+125, z_off+150, color)
 
 # --- INTERFACE ---
-with st.sidebar:
-    st.header("Paramètres")
-    fmt = st.selectbox("Format Palette", ["1000x1200 (VMF)", "800x1200 (EURO)"])
-    w_p = 1000 if "1000" in fmt else 800
-    l_lisse = st.selectbox("Longueur de Lisse (mm)", [2700, 3300, 3600], index=0)
-    h_max = st.number_input("Hauteur Rack (mm)", value=1800)
-    ref = st.selectbox("Article", st.session_state.db_refs["Référence"].tolist())
+st.sidebar.title("🚀 WMS Pro v9.8")
+menu = st.sidebar.radio("Menu", ["📦 Simulateur", "📑 Catalogue Articles", "⚙️ Paramètres Rack"])
 
-item = st.session_state.db_refs[st.session_state.db_refs["Référence"] == ref].iloc[0]
+if menu == "📑 Catalogue Articles":
+    st.header("Gestion du Référentiel")
+    with st.form("add_ref"):
+        c1, c2, c3, c4, c5 = st.columns(5)
+        new_ref = c1.text_input("Référence")
+        new_l = c2.number_input("Longueur (mm)", 100)
+        new_w = c3.number_input("Largeur (mm)", 100)
+        new_h = c4.number_input("Hauteur (mm)", 50)
+        new_p = c5.number_input("Poids (kg)", 0.5)
+        if st.form_submit_button("Ajouter au catalogue"):
+            new_row = pd.DataFrame([{"REF":new_ref, "L":new_l, "W":new_w, "H":new_h, "P":new_p}])
+            st.session_state.catalogue = pd.concat([st.session_state.catalogue, new_row], ignore_index=True)
+    st.dataframe(st.session_state.catalogue, use_container_width=True)
 
-# Calculs de charge
-plan_a = get_optimal_layer(w_p, 1200, item['L'], item['W'])
-plan_b = get_crossed_layer(plan_a, w_p, 1200)
-nb_c = int((h_max - 150) // item['H'])
-h_charge = 150 + (nb_c * item['H'])
+elif menu == "⚙️ Paramètres Rack":
+    st.header("Configuration de la Structure")
+    st.session_state.l_lisse = st.number_input("Longueur Lisse (mm)", 2700)
+    st.session_state.capa_lisse = st.number_input("Capacité Max par Niveau (kg)", 3000)
+    st.session_state.h_utile = st.number_input("Hauteur Utile Alvéole (mm)", 1800)
+    st.session_state.sect_montant = st.slider("Section Montant (mm)", 80, 120, 100)
 
-# --- AFFICHAGE ---
-st.subheader("Visualisation de l'espace vide central")
+else:
+    # --- SIMULATEUR ---
+    if 'l_lisse' not in st.session_state: st.session_state.l_lisse = 2700
+    if 'capa_lisse' not in st.session_state: st.session_state.capa_lisse = 3000
+    if 'h_utile' not in st.session_state: st.session_state.h_utile = 1800
+    if 'sect_montant' not in st.session_state: st.session_state.sect_montant = 100
 
+    with st.sidebar:
+        ref_sel = st.selectbox("Sélectionner Article", st.session_state.catalogue["REF"].tolist())
+        fmt_pal = st.selectbox("Format Palette", ["1000x1200 (VMF)", "800x1200 (EURO)"])
+        w_p = 1000 if "1000" in fmt_pal else 800
 
-col1, col2 = st.columns([1, 2])
+    item = st.session_state.catalogue[st.session_state.catalogue["REF"] == ref_sel].iloc[0]
 
-with col1:
-    st.write("### Détail Palette Unique")
-    f1 = go.Figure()
-    draw_real_pallet(f1, 0, w_p, 1200, 0)
-    for k in range(nb_c):
-        p, col = (plan_a, "#1E88E5") if k % 2 == 0 else (plan_b, "#E53935")
-        for b in p: draw_box(f1, b['x'], b['x']+b['w'], b['y'], b['y']+b['h'], 150+(k*item['H']), 150+((k+1)*item['H']), col)
-    f1.update_layout(scene=dict(aspectmode='data'), height=500, margin=dict(l=0,r=0,b=0,t=0))
-    st.plotly_chart(f1, use_container_width=True)
-
-with col2:
-    st.write(f"### Implantation Lisse {l_lisse} mm")
-    f2 = go.Figure()
-    # Structure Rack (Montants et Lisses)
-    for px in [-100, l_lisse]:
-        for py in [0, 1100]: draw_box(f2, px, px+100, py, py+100, -150, h_max+150, "#455A64")
-    draw_box(f2, 0, l_lisse, 0, 100, -120, 0, "orange")
-    draw_box(f2, 0, l_lisse, 1100, 1200, -120, 0, "orange")
-
-    # PALETTE GAUCHE (Ancrée à 0)
-    draw_real_pallet(f2, 0, w_p, 1200, 0)
-    draw_box(f2, 5, w_p-5, 5, 1195, 150, h_charge, "rgba(30, 136, 229, 0.4)")
+    # CALCULS LOGISTIQUES
+    plan_a = get_optimal_layer(w_p, 1200, item['L'], item['W'])
+    plan_b = get_crossed_layer(plan_a, w_p, 1200)
+    nb_c = int((st.session_state.h_utile - 150) // item['H'])
+    poids_pal = int(len(plan_a) * nb_c * item['P'])
     
-    # PALETTE DROITE (Ancrée à l'extrémité de la lisse)
-    x_droite = l_lisse - w_p
-    draw_real_pallet(f2, x_droite, w_p, 1200, 0)
-    draw_box(f2, x_droite+5, l_lisse-5, 5, 1195, 150, h_charge, "rgba(30, 136, 229, 0.4)")
+    # Intelligence de pose
+    if w_p == 1000: # Logique 2 palettes extrêmes
+        positions_x = [0, st.session_state.l_lisse - w_p]
+        nb_pal_lisse = 2
+    else: # Logique 3 palettes collées
+        positions_x = [0, 850, 1700] if st.session_state.l_lisse >= 2500 else [0]
+        nb_pal_lisse = len(positions_x)
     
-    # MESURE DU VIDE CENTRAL
-    vide_central = l_lisse - (2 * w_p)
-    if vide_central > 0:
-        f2.add_trace(go.Scatter3d(
-            x=[w_p, l_lisse-w_p], y=[600, 600], z=[h_charge+100, h_charge+100],
-            mode='lines+text', text=[f"VIDE CENTRAL : {vide_central} mm"],
-            line=dict(color='black', width=6)
-        ))
+    poids_total_lisse = poids_pal * nb_pal_lisse
+    
+    st.header(f"Simulation : {ref_sel} sur {fmt_pal}")
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Colis / Palette", len(plan_a) * nb_c)
+    
+    color_poids = "normal" if poids_total_lisse <= st.session_state.capa_lisse else "inverse"
+    k2.metric("Charge Lisse Total", f"{poids_total_lisse} kg", f"Capacité: {st.session_state.capa_lisse}", delta_color=color_poids)
+    k3.metric("Mode de Pose", f"{nb_pal_lisse} Palettes", "Automatique")
 
-    f2.update_layout(scene=dict(aspectmode='data'), height=600, margin=dict(l=0,r=0,b=0,t=0))
-    st.plotly_chart(f2, use_container_width=True)
+    if poids_total_lisse > st.session_state.capa_lisse:
+        st.error(f"⚠️ SURCHARGE LISSE : Dépassement de {poids_total_lisse - st.session_state.capa_lisse} kg")
+
+    v1, v2 = st.columns([1, 2])
+    
+    with v1:
+        st.write("### Plan de Couche")
+        f1 = go.Figure()
+        draw_real_pallet(f1, 0, w_p, 1200, 0)
+        for k in range(nb_c):
+            p, col = (plan_a, "#1E88E5") if k % 2 == 0 else (plan_b, "#E53935")
+            for b in p: draw_box(f1, b['x'], b['x']+b['w'], b['y'], b['y']+b['h'], 150+(k*item['H']), 150+((k+1)*item['H']), col)
+        f1.update_layout(scene=dict(aspectmode='data'), height=500, margin=dict(l=0,r=0,b=0,t=0))
+        st.plotly_chart(f1, use_container_width=True)
+
+    with v2:
+        st.write("### Vue Rack Dynamique")
+        f2 = go.Figure()
+        # Structure Rack
+        lisse_col = "red" if poids_total_lisse > st.session_state.capa_lisse else "orange"
+        sm = st.session_state.sect_montant
+        for px in [-sm, st.session_state.l_lisse]:
+            for py in [0, 1100]: draw_box(f2, px, px+sm, py, py+sm, -150, st.session_state.h_utile+150, "#455A64")
+        draw_box(f2, 0, st.session_state.l_lisse, 0, 100, -120, 0, lisse_col) # Lisse AV
+        draw_box(f2, 0, st.session_state.l_lisse, 1100, 1200, -120, 0, lisse_col) # Lisse AR
+
+        # Pose des palettes selon la logique
+        for x_pos in positions_x:
+            draw_real_pallet(f2, x_pos, w_p, 1200, 0)
+            draw_box(f2, x_pos+10, x_pos+w_p-10, 10, 1190, 150, 150+(nb_c*item['H']), "rgba(33, 150, 243, 0.4)")
+        
+        f2.update_layout(scene=dict(aspectmode='data'), height=600, margin=dict(l=0,r=0,b=0,t=0))
+        st.plotly_chart(f2, use_container_width=True)
