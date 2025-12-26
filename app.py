@@ -3,135 +3,114 @@ import plotly.graph_objects as go
 import pandas as pd
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Expert WMS v8.8 - Tetris Mode", layout="wide")
+st.set_page_config(page_title="Expert WMS v8.9 - Tetris Fix", layout="wide")
 
 if 'db_refs' not in st.session_state:
     st.session_state.db_refs = pd.DataFrame(columns=["Référence", "L", "W", "H", "P"])
 
-# --- MOTEUR D'OPTIMISATION TETRIS (Étape validée) ---
+# --- MOTEUR D'OPTIMISATION TETRIS RÉVISÉ ---
 
-def get_complex_plan(W, L, cl, cw):
+def get_best_plan(W_pal, L_pal, c_L, c_W):
     """
-    Calcule le plan de palettisation optimal en testant les rotations 
-    pour remplir les zones résiduelles (Mode Tetris).
+    Teste différentes combinaisons pour trouver le maximum de colis.
     """
-    plan = []
-    
-    # 1. Remplissage principal (Orientation Standard)
-    nx = int(W // cl)
-    ny = int(L // cw)
-    
-    for i in range(nx):
-        for j in range(ny):
-            plan.append({'x': i * cl, 'y': j * cw, 'w': cl, 'h': cw})
-    
-    # 2. Remplissage résiduel en X (Rotation sur la bande latérale)
-    reste_x = W - (nx * cl)
-    if reste_x >= cw:
-        nb_colis_rot_x = int(L // cl)
-        for j in range(nb_colis_rot_x):
-            plan.append({'x': nx * cl, 'y': j * cl, 'w': cw, 'h': cl})
+    def scenario_tetris(W, L, cl, cw):
+        plan = []
+        # Bloc principal
+        nx = int(W // cl)
+        ny = int(L // cw)
+        for i in range(nx):
+            for j in range(ny):
+                plan.append({'x': i * cl, 'y': j * cw, 'w': cl, 'h': cw})
+        
+        # Remplissage de la bande vide sur la droite (Rotation)
+        reste_x = W - (nx * cl)
+        if reste_x >= cw:
+            ny_rot = int(L // cl)
+            for j in range(ny_rot):
+                plan.append({'x': nx * cl, 'y': j * cl, 'w': cw, 'h': cl})
+        
+        # Remplissage de la bande vide sur le haut (Rotation)
+        reste_y = L - (ny * cw)
+        if reste_y >= cl:
+            nx_rot = int((nx * cl) // cw)
+            for i in range(nx_rot):
+                plan.append({'x': i * cw, 'y': ny * cw, 'w': cw, 'h': cl})
+        return plan
 
-    # 3. Remplissage résiduel en Y (Rotation sur la bande supérieure)
-    reste_y = L - (ny * cw)
-    if reste_y >= cl:
-        # On remplit l'espace au-dessus des colis principaux
-        nb_colis_rot_y = int((nx * cl) // cw)
-        for i in range(nb_colis_rot_y):
-            plan.append({'x': i * cw, 'y': ny * cw, 'w': cw, 'h': cl})
-            
-    return plan
+    # On teste les deux orientations de départ de la palette
+    p1 = scenario_tetris(W_pal, L_pal, c_L, c_W)
+    p2 = scenario_tetris(W_pal, L_pal, c_W, c_L)
+    
+    return p1 if len(p1) >= len(p2) else p2
 
 # --- FONCTIONS DE DESSIN ---
 
-def draw_box(fig, x0, x1, y0, y1, z0, z1, color, opacity=1.0):
+def draw_box(fig, x0, x1, y0, y1, z0, z1, color):
     fig.add_trace(go.Mesh3d(
         x=[x0, x1, x1, x0, x0, x1, x1, x0], y=[y0, y0, y1, y1, y0, y0, y1, y1], z=[z0, z0, z0, z0, z1, z1, z1, z1],
         i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-        color=color, opacity=opacity, flatshading=True, showlegend=False
+        color=color, opacity=1, flatshading=True, showlegend=False
     ))
+    # Contours noirs pour la visibilité
     lx = [x0, x1, x1, x0, x0, None, x0, x1, x1, x0, x0, None, x0, x0, None, x1, x1, None, x1, x1, None, x0, x0]
     ly = [y0, y0, y1, y1, y0, None, y0, y0, y1, y1, y0, None, y0, y0, None, y0, y0, None, y1, y1, None, y1, y1]
     lz = [z0, z0, z0, z0, z0, None, z1, z1, z1, z1, z1, None, z0, z1, None, z0, z1, None, z0, z1, None, z0, z1]
-    fig.add_trace(go.Scatter3d(x=lx, y=ly, z=lz, mode='lines', line=dict(color='black', width=1), showlegend=False))
+    fig.add_trace(go.Scatter3d(x=lx, y=ly, z=lz, mode='lines', line=dict(color='black', width=2), showlegend=False))
 
-def draw_pro_pallet(fig, x0, w_pal, l_pal, z0, color="#8D6E63"):
-    """Palette réaliste (150mm de hauteur)"""
-    for off_x in [0, w_pal/2 - 50, w_pal - 100]:
-        draw_box(fig, x0+off_x, x0+off_x+100, 0, l_pal, z0, z0+25, color)
-    for dx in [0, w_pal/2 - 50, w_pal - 100]:
-        for dy in [0, l_pal/2 - 50, l_pal - 100]:
-            draw_box(fig, x0+dx, x0+dx+100, dy, dy+100, z0+25, z0+125, color)
-    draw_box(fig, x0, x0+w_pal, 0, l_pal, z0+125, z0+150, color)
+# --- INTERFACE ---
 
-def draw_2d_layer(plan, w_pal, l_pal, color, title):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=[0, w_pal, w_pal, 0, 0], y=[0, 0, l_pal, l_pal, 0], fill="toself", fillcolor="#D7CCC8", line=dict(color="#5D4037", width=2)))
-    for p in plan:
-        fig.add_trace(go.Scatter(x=[p['x'], p['x']+p['w'], p['x']+p['w'], p['x'], p['x']], y=[p['y'], p['y'], p['y']+p['h'], p['y']+p['h'], p['y']], fill="toself", fillcolor=color, line=dict(color="white", width=1), showlegend=False))
-    fig.update_layout(title=title, xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x"), height=350)
-    return fig
+st.sidebar.title("🏭 Expert WMS v8.9")
+menu = st.sidebar.radio("Navigation", ["Base Articles", "Optimisation"])
 
-# --- LOGIQUE D'APPLICATION ---
-
-st.sidebar.title("🏭 Expert WMS v8.8")
-mode = st.sidebar.radio("Navigation", ["Base Articles", "Optimisation Tetris"])
-
-if mode == "Base Articles":
+if menu == "Base Articles":
     st.header("📋 Référentiel Articles")
-    with st.form("add_item"):
-        c1, c2, c3, c4, c5 = st.columns([2,1,1,1,1])
+    with st.form("add"):
+        c1, c2, c3, c4 = st.columns(4)
         n = c1.text_input("Référence")
-        l = c2.number_input("Long (mm)", value=400)
-        w = c3.number_input("Larg (mm)", value=300)
-        h = c4.number_input("Haut (mm)", value=250)
-        p = c5.number_input("Poids (kg)", value=10.0)
+        l = c2.number_input("L (mm)", value=400)
+        w = c3.number_input("W (mm)", value=300)
+        h = c4.number_input("H (mm)", value=250)
         if st.form_submit_button("Ajouter"):
-            st.session_state.db_refs = pd.concat([st.session_state.db_refs, pd.DataFrame([{"Référence":n,"L":l,"W":w,"H":h,"P":p}])]).drop_duplicates()
-    st.dataframe(st.session_state.db_refs, use_container_width=True)
+            st.session_state.db_refs = pd.concat([st.session_state.db_refs, pd.DataFrame([{"Référence":n,"L":l,"W":w,"H":h}])]).drop_duplicates()
+    st.dataframe(st.session_state.db_refs)
 
 else:
     if st.session_state.db_refs.empty:
-        st.warning("Veuillez d'abord ajouter un article.")
-        st.stop()
-
+        st.warning("Ajoutez un article."); st.stop()
+    
     with st.sidebar:
-        ref_sel = st.selectbox("Sélectionner Article", st.session_state.db_refs["Référence"].tolist())
-        w_pal = st.radio("Format Palette", [800, 1000], index=0)
-        l_lisse = st.selectbox("Longueur Lisse", [2700, 3600, 1350])
-        h_utile = st.number_input("Hauteur Utile Rack", value=1800)
+        ref = st.selectbox("Article", st.session_state.db_refs["Référence"].tolist())
+        w_pal = st.selectbox("Largeur Palette", [800, 1000])
+        l_pal = 1200
+        h_max = st.number_input("Hauteur Max (mm)", value=1800)
 
-    item = st.session_state.db_refs[st.session_state.db_refs["Référence"] == ref_sel].iloc[0]
+    item = st.session_state.db_refs[st.session_state.db_refs["Référence"] == ref].iloc[0]
     
-    # Appel du moteur Tetris
-    plan_a = get_complex_plan(w_pal, 1200, item['L'], item['W'])
+    # Calcul Tetris
+    plan = get_best_plan(w_pal, l_pal, item['L'], item['W'])
+    nb_couches = int((h_max - 150) // item['H'])
     
-    # Calcul des couches
-    nb_pal = l_lisse // w_pal
-    n_h = (h_utile - 150) // item['H']
-    couches = int(max(1, n_h))
+    st.header(f"Résultat pour {ref} : {len(plan)} colis/couche")
     
-    st.header(f"📦 Analyse Tetris : {ref_sel}")
-    st.info(f"Nombre de colis par couche : **{len(plan_a)}** (Optimisé avec rotations)")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Plan de Pose 2D")
+        fig2d = go.Figure()
+        fig2d.add_trace(go.Scatter(x=[0, w_pal, w_pal, 0, 0], y=[0, 0, l_pal, l_pal, 0], fill="toself", fillcolor="lightgray", name="Palette"))
+        for p in plan:
+            fig2d.add_trace(go.Scatter(x=[p['x'], p['x']+p['w'], p['x']+p['w'], p['x'], p['x']], y=[p['y'], p['y'], p['y']+p['h'], p['y']+p['h'], p['y']], fill="toself", line=dict(color="white")))
+        fig2d.update_layout(yaxis=dict(scaleanchor="x"), showlegend=False)
+        st.plotly_chart(fig2d)
 
-    # Affichage 3D
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Visualisation 3D")
-        f1 = go.Figure()
-        draw_pro_pallet(f1, 0, w_pal, 1200, 0)
-        for k in range(couches):
-            color = "#2196F3" if k % 2 == 0 else "#EF5350"
-            for p in plan_a:
-                z0 = 150 + (k * item['H'])
-                # Alternance pour le rendu
-                fx, fy = (w_pal-p['x']-p['w'], 1200-p['y']-p['h']) if k % 2 == 1 else (p['x'], p['y'])
-                draw_box(f1, fx, fx+p['w'], fy, fy+p['h'], z0, z0+item['H'], color)
-        f1.update_layout(scene=dict(aspectmode='data'), height=600, margin=dict(l=0,r=0,b=0,t=0))
-        st.plotly_chart(f1, use_container_width=True)
-
-    with c2:
-        st.subheader("Plan de Pose (2D)")
-        st.plotly_chart(draw_2d_layer(plan_a, w_pal, 1200, "#2196F3", "Couche Type"), use_container_width=True)
-        st.write(f"**Total Colis par Palette :** {len(plan_a) * couches}")
-        st.write(f"**Hauteur Totale :** {150 + (couches * item['H'])} mm")
+    with col2:
+        st.subheader("Rendu 3D")
+        fig3d = go.Figure()
+        # Palette (Base)
+        draw_box(fig3d, 0, w_pal, 0, l_pal, 0, 150, "peru")
+        # Colis (Couche 1)
+        for p in plan:
+            draw_box(fig3d, p['x'], p['x']+p['w'], p['y'], p['y']+p['h'], 150, 150+item['H'], "royalblue")
+        fig3d.update_layout(scene=dict(aspectmode='data'), margin=dict(l=0,r=0,b=0,t=0))
+        st.plotly_chart(fig3d)
