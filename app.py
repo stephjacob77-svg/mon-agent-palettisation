@@ -3,114 +3,119 @@ import plotly.graph_objects as go
 import pandas as pd
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Expert WMS v8.9 - Tetris Fix", layout="wide")
+st.set_page_config(page_title="Expert WMS v9.0 - Croisement Master", layout="wide")
 
 if 'db_refs' not in st.session_state:
-    st.session_state.db_refs = pd.DataFrame(columns=["Référence", "L", "W", "H", "P"])
+    st.session_state.db_refs = pd.DataFrame(columns=["Référence", "L", "W", "H"])
 
-# --- MOTEUR D'OPTIMISATION TETRIS RÉVISÉ ---
+# --- MOTEUR D'OPTIMISATION & CROISEMENT ---
 
-def get_best_plan(W_pal, L_pal, c_L, c_W):
-    """
-    Teste différentes combinaisons pour trouver le maximum de colis.
-    """
-    def scenario_tetris(W, L, cl, cw):
+def compute_layer(W_pal, L_pal, c_L, c_W):
+    """Calcule la meilleure disposition possible (Tetris)"""
+    def fill(W, L, cl, cw):
         plan = []
-        # Bloc principal
-        nx = int(W // cl)
-        ny = int(L // cw)
+        nx, ny = int(W // cl), int(L // cw)
         for i in range(nx):
             for j in range(ny):
                 plan.append({'x': i * cl, 'y': j * cw, 'w': cl, 'h': cw})
-        
-        # Remplissage de la bande vide sur la droite (Rotation)
-        reste_x = W - (nx * cl)
-        if reste_x >= cw:
-            ny_rot = int(L // cl)
-            for j in range(ny_rot):
+        # Remplissage résiduel X
+        rx = W - (nx * cl)
+        if rx >= cw:
+            for j in range(int(L // cl)):
                 plan.append({'x': nx * cl, 'y': j * cl, 'w': cw, 'h': cl})
-        
-        # Remplissage de la bande vide sur le haut (Rotation)
-        reste_y = L - (ny * cw)
-        if reste_y >= cl:
-            nx_rot = int((nx * cl) // cw)
-            for i in range(nx_rot):
+        # Remplissage résiduel Y
+        ry = L - (ny * cw)
+        if ry >= cl:
+            for i in range(int((nx * cl) // cw)):
                 plan.append({'x': i * cw, 'y': ny * cw, 'w': cw, 'h': cl})
         return plan
 
-    # On teste les deux orientations de départ de la palette
-    p1 = scenario_tetris(W_pal, L_pal, c_L, c_W)
-    p2 = scenario_tetris(W_pal, L_pal, c_W, c_L)
-    
+    # Test des deux orientations de base
+    p1 = fill(W_pal, L_pal, c_L, c_W)
+    p2 = fill(W_pal, L_pal, c_W, c_L)
     return p1 if len(p1) >= len(p2) else p2
 
-# --- FONCTIONS DE DESSIN ---
+def get_mirrored_plan(plan, W_pal, L_pal):
+    """Génère la couche croisée par symétrie centrale"""
+    mirrored = []
+    for p in plan:
+        mirrored.append({
+            'x': W_pal - p['x'] - p['w'],
+            'y': L_pal - p['y'] - p['h'],
+            'w': p['w'],
+            'h': p['h']
+        })
+    return mirrored
 
-def draw_box(fig, x0, x1, y0, y1, z0, z1, color):
+# --- DESSIN 3D ---
+
+def draw_box(fig, x0, x1, y0, y1, z0, z1, color, line_color="black"):
     fig.add_trace(go.Mesh3d(
         x=[x0, x1, x1, x0, x0, x1, x1, x0], y=[y0, y0, y1, y1, y0, y0, y1, y1], z=[z0, z0, z0, z0, z1, z1, z1, z1],
         i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2], j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3], k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
         color=color, opacity=1, flatshading=True, showlegend=False
     ))
-    # Contours noirs pour la visibilité
+    # Arêtes pour bien voir le croisement
     lx = [x0, x1, x1, x0, x0, None, x0, x1, x1, x0, x0, None, x0, x0, None, x1, x1, None, x1, x1, None, x0, x0]
     ly = [y0, y0, y1, y1, y0, None, y0, y0, y1, y1, y0, None, y0, y0, None, y0, y0, None, y1, y1, None, y1, y1]
     lz = [z0, z0, z0, z0, z0, None, z1, z1, z1, z1, z1, None, z0, z1, None, z0, z1, None, z0, z1, None, z0, z1]
-    fig.add_trace(go.Scatter3d(x=lx, y=ly, z=lz, mode='lines', line=dict(color='black', width=2), showlegend=False))
+    fig.add_trace(go.Scatter3d(x=lx, y=ly, z=lz, mode='lines', line=dict(color=line_color, width=2), showlegend=False))
 
 # --- INTERFACE ---
 
-st.sidebar.title("🏭 Expert WMS v8.9")
-menu = st.sidebar.radio("Navigation", ["Base Articles", "Optimisation"])
+st.sidebar.title("🏭 Expert WMS v9.0")
+if st.sidebar.button("➕ Ajouter Colis 300x200x150"):
+    new_item = pd.DataFrame([{"Référence":"Test 300x200", "L":300, "W":200, "H":150}])
+    st.session_state.db_refs = pd.concat([st.session_state.db_refs, new_item]).drop_duplicates()
 
-if menu == "Base Articles":
-    st.header("📋 Référentiel Articles")
-    with st.form("add"):
-        c1, c2, c3, c4 = st.columns(4)
-        n = c1.text_input("Référence")
-        l = c2.number_input("L (mm)", value=400)
-        w = c3.number_input("W (mm)", value=300)
-        h = c4.number_input("H (mm)", value=250)
-        if st.form_submit_button("Ajouter"):
-            st.session_state.db_refs = pd.concat([st.session_state.db_refs, pd.DataFrame([{"Référence":n,"L":l,"W":w,"H":h}])]).drop_duplicates()
-    st.dataframe(st.session_state.db_refs)
+if st.session_state.db_refs.empty:
+    st.info("Utilisez le bouton à gauche pour charger le format test.")
+    st.stop()
 
-else:
-    if st.session_state.db_refs.empty:
-        st.warning("Ajoutez un article."); st.stop()
-    
-    with st.sidebar:
-        ref = st.selectbox("Article", st.session_state.db_refs["Référence"].tolist())
-        w_pal = st.selectbox("Largeur Palette", [800, 1000])
-        l_pal = 1200
-        h_max = st.number_input("Hauteur Max (mm)", value=1800)
+ref = st.sidebar.selectbox("Article", st.session_state.db_refs["Référence"].tolist())
+w_p = st.sidebar.selectbox("Largeur Palette", [800, 1000])
+h_m = st.sidebar.number_input("Hauteur Max", value=1000)
 
-    item = st.session_state.db_refs[st.session_state.db_refs["Référence"] == ref].iloc[0]
-    
-    # Calcul Tetris
-    plan = get_best_plan(w_pal, l_pal, item['L'], item['W'])
-    nb_couches = int((h_max - 150) // item['H'])
-    
-    st.header(f"Résultat pour {ref} : {len(plan)} colis/couche")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Plan de Pose 2D")
-        fig2d = go.Figure()
-        fig2d.add_trace(go.Scatter(x=[0, w_pal, w_pal, 0, 0], y=[0, 0, l_pal, l_pal, 0], fill="toself", fillcolor="lightgray", name="Palette"))
-        for p in plan:
-            fig2d.add_trace(go.Scatter(x=[p['x'], p['x']+p['w'], p['x']+p['w'], p['x'], p['x']], y=[p['y'], p['y'], p['y']+p['h'], p['y']+p['h'], p['y']], fill="toself", line=dict(color="white")))
-        fig2d.update_layout(yaxis=dict(scaleanchor="x"), showlegend=False)
-        st.plotly_chart(fig2d)
+item = st.session_state.db_refs[st.session_state.db_refs["Référence"] == ref].iloc[0]
 
-    with col2:
-        st.subheader("Rendu 3D")
-        fig3d = go.Figure()
-        # Palette (Base)
-        draw_box(fig3d, 0, w_pal, 0, l_pal, 0, 150, "peru")
-        # Colis (Couche 1)
-        for p in plan:
-            draw_box(fig3d, p['x'], p['x']+p['w'], p['y'], p['y']+p['h'], 150, 150+item['H'], "royalblue")
-        fig3d.update_layout(scene=dict(aspectmode='data'), margin=dict(l=0,r=0,b=0,t=0))
-        st.plotly_chart(fig3d)
+# CALCUL DES DEUX PLANS (A et B)
+plan_a = compute_layer(w_p, 1200, item['L'], item['W'])
+plan_b = get_mirrored_plan(plan_a, w_p, 1200)
+nb_c = int((h_m - 150) // item['H'])
+
+st.header(f"📦 Schéma de Croisement : {len(plan_a)} colis/couche")
+
+c1, c2 = st.columns(2)
+
+with c1:
+    st.subheader("Vues 2D : Alternance")
+    # Couche A
+    f2a = go.Figure()
+    f2a.add_trace(go.Scatter(x=[0,w_p,w_p,0,0], y=[0,0,1200,1200,0], fill="toself", fillcolor="silver"))
+    for p in plan_a:
+        f2a.add_trace(go.Scatter(x=[p['x'],p['x']+p['w'],p['x']+p['w'],p['x'],p['x']], y=[p['y'],p['y'],p['y']+p['h'],p['y']+p['h'],p['y']], fill="toself", line=dict(color="white")))
+    f2a.update_layout(title="Couche IMPAIRE (A)", yaxis=dict(scaleanchor="x"), showlegend=False, height=400)
+    st.plotly_chart(f2a)
+
+    # Couche B
+    f2b = go.Figure()
+    f2b.add_trace(go.Scatter(x=[0,w_p,w_p,0,0], y=[0,0,1200,1200,0], fill="toself", fillcolor="silver"))
+    for p in plan_b:
+        f2b.add_trace(go.Scatter(x=[p['x'],p['x']+p['w'],p['x']+p['w'],p['x'],p['x']], y=[p['y'],p['y'],p['y']+p['h'],p['y']+p['h'],p['y']], fill="toself", line=dict(color="white")))
+    f2b.update_layout(title="Couche PAIRE (B) - Inversée", yaxis=dict(scaleanchor="x"), showlegend=False, height=400)
+    st.plotly_chart(f2b)
+
+with c2:
+    st.subheader("Rendu 3D Croisé")
+    f3 = go.Figure()
+    # Support bois
+    draw_box(f3, 0, w_p, 0, 1200, 0, 150, "peru")
+    # Empilage alterné
+    for k in range(nb_c):
+        current_plan = plan_a if k % 2 == 0 else plan_b
+        color = "royalblue" if k % 2 == 0 else "crimson"
+        z0 = 150 + (k * item['H'])
+        for p in current_plan:
+            draw_box(f3, p['x'], p['x']+p['w'], p['y'], p['y']+p['h'], z0, z0+item['H'], color)
+    f3.update_layout(scene=dict(aspectmode='data'), height=800, margin=dict(l=0,r=0,b=0,t=0))
+    st.plotly_chart(f3, use_container_width=True)
